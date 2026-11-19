@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WaReact</string>
+    <string name="service_label">WaReact - التفاعل التلقائي</string>
+    <string name="service_desc">تراقب رسائل واتساب بحثاً عن الكلمات المفتاحية التي حددتها، وتضع التفاعل (إيموجي) المحدد على الرسالة تلقائياً. لا ترسل أي بيانات من محادثاتك خارج الجهاز.</string>
+</resources>
