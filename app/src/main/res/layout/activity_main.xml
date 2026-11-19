@@ -1,28 +1,137 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:layoutDirection="rtl">
 
-    <LinearLayout
+    <!-- ============ شاشة التفعيل ============ -->
+    <ScrollView
+        android:id="@+id/layoutActivate"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="28dp">
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="88dp"
+                android:layout_height="88dp"
+                app:cardBackgroundColor="@color/accent"
+                app:cardCornerRadius="28dp"
+                app:cardElevation="0dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:text="⚡"
+                    android:textSize="40sp" />
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="WaReact"
+                android:textColor="@color/text_primary"
+                android:textSize="34sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center"
+                android:text="أدخل كود الترخيص لبدء الاستخدام"
+                android:textColor="@color/text_secondary"
+                android:textSize="15sp" />
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/WaCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="20dp">
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="?attr/textInputOutlinedStyle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="كود الترخيص"
+                        app:boxCornerRadiusBottomEnd="16dp"
+                        app:boxCornerRadiusBottomStart="16dp"
+                        app:boxCornerRadiusTopEnd="16dp"
+                        app:boxCornerRadiusTopStart="16dp">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/etCode"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center"
+                            android:inputType="textCapCharacters|textNoSuggestions"
+                            android:layoutDirection="ltr"
+                            android:singleLine="true"
+                            android:textSize="20sp" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnActivate"
+                        android:layout_width="match_parent"
+                        android:layout_height="60dp"
+                        android:layout_marginTop="16dp"
+                        android:text="تفعيل"
+                        android:textSize="17sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="30dp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:id="@+id/tvActivateMsg"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:gravity="center"
+                android:textColor="@color/danger"
+                android:textSize="14sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:gravity="center"
+                android:text="الكود صالح 30 يوماً من لحظة التفعيل ويرتبط بجهاز واحد"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ============ الشاشة الرئيسية ============ -->
+    <LinearLayout
+        android:id="@+id/layoutMain"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:visibility="gone">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="WaReact"
-            android:textAppearance="?attr/textAppearanceHeadlineSmall" />
-
-        <!-- الترخيص -->
+        <!-- شريط العدّ التنازلي -->
         <com.google.android.material.card.MaterialCardView
-            style="?attr/materialCardViewOutlinedStyle"
+            style="@style/WaCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp">
+            android:layout_margin="16dp"
+            app:cardBackgroundColor="@color/card_hi">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -31,171 +140,318 @@
                 android:padding="16dp">
 
                 <TextView
-                    android:id="@+id/tvLicense"
-                    android:layout_width="match_parent"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="الترخيص: غير مفعّل"
-                    android:textAppearance="?attr/textAppearanceTitleMedium" />
+                    android:text="⏳ ينتهي ترخيصك بعد"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
 
-                <com.google.android.material.textfield.TextInputLayout
-                    style="?attr/textInputOutlinedStyle"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:hint="كود الترخيص">
+                    android:orientation="horizontal">
 
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/etCode"
-                        android:layout_width="match_parent"
+                    <LinearLayout
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:inputType="textCapCharacters|textNoSuggestions"
-                        android:singleLine="true" />
-                </com.google.android.material.textfield.TextInputLayout>
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:orientation="vertical">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnActivate"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="تفعيل الكود" />
+                        <TextView
+                            android:id="@+id/tvDays"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0"
+                            android:textColor="@color/accent"
+                            android:textSize="30sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="يوم"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/tvHours"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="00"
+                            android:textColor="@color/accent"
+                            android:textSize="30sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ساعة"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/tvMins"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="00"
+                            android:textColor="@color/accent"
+                            android:textSize="30sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="دقيقة"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/tvSecs"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="00"
+                            android:textColor="@color/accent"
+                            android:textSize="30sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ثانية"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- الإعدادات -->
-        <com.google.android.material.card.MaterialCardView
-            style="?attr/materialCardViewOutlinedStyle"
+        <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp">
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:paddingBottom="28dp"
+                android:paddingEnd="16dp"
+                android:paddingStart="16dp">
 
-                <TextView
+                <!-- التشغيل -->
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/WaCard"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="الإعدادات"
-                    android:textAppearance="?attr/textAppearanceTitleMedium" />
+                    android:layout_height="wrap_content">
 
-                <com.google.android.material.textfield.TextInputLayout
-                    style="?attr/textInputOutlinedStyle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:hint="الكلمات المفتاحية (كلمة أو منطقة بكل سطر)">
-
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/etKeywords"
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:gravity="top"
-                        android:inputType="textMultiLine"
-                        android:minLines="4" />
-                </com.google.android.material.textfield.TextInputLayout>
+                        android:orientation="vertical"
+                        android:padding="20dp">
 
-                <com.google.android.material.textfield.TextInputLayout
-                    style="?attr/textInputOutlinedStyle"
+                        <TextView
+                            android:id="@+id/tvRunState"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="○ متوقفة"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="20sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvLast"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="—"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnToggle"
+                            android:layout_width="match_parent"
+                            android:layout_height="68dp"
+                            android:layout_marginTop="16dp"
+                            android:text="ابدأ المراقبة"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            app:cornerRadius="34dp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- الإعدادات -->
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/WaCard"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:hint="إيموجي التفاعل (مثال: 👍 ❤️ 😂 😮 😢 🙏)">
+                    android:layout_marginTop="14dp">
 
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/etEmoji"
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:inputType="text"
-                        android:maxLength="8"
-                        android:singleLine="true" />
-                </com.google.android.material.textfield.TextInputLayout>
+                        android:orientation="vertical"
+                        android:padding="20dp">
 
-                <com.google.android.material.textfield.TextInputLayout
-                    style="?attr/textInputOutlinedStyle"
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="الكلمات والمناطق"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            style="?attr/textInputOutlinedStyle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:hint="كلمة أو منطقة بكل سطر"
+                            app:boxCornerRadiusBottomEnd="16dp"
+                            app:boxCornerRadiusBottomStart="16dp"
+                            app:boxCornerRadiusTopEnd="16dp"
+                            app:boxCornerRadiusTopStart="16dp">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/etKeywords"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="top"
+                                android:inputType="textMultiLine"
+                                android:minLines="4" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="20dp"
+                            android:text="إيموجي التفاعل"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <com.google.android.material.chip.ChipGroup
+                            android:id="@+id/chipEmoji"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            app:selectionRequired="true"
+                            app:singleSelection="true" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="فترة الخمول بعد كل تفاعل"
+                                android:textColor="@color/text_primary"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/tvCooldownVal"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="60 ثانية"
+                                android:textColor="@color/accent"
+                                android:textSize="15sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+
+                        <com.google.android.material.slider.Slider
+                            android:id="@+id/sliderCooldown"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layoutDirection="ltr"
+                            android:stepSize="5"
+                            android:valueFrom="5"
+                            android:valueTo="300" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnSave"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="match_parent"
+                            android:layout_height="52dp"
+                            android:layout_marginTop="8dp"
+                            android:text="حفظ الإعدادات"
+                            app:cornerRadius="26dp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- الأذونات -->
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/WaCard"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:hint="فترة الخمول بعد كل تفاعل (ثواني)">
+                    android:layout_marginTop="14dp">
 
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/etCooldown"
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:inputType="number"
-                        android:maxLength="4"
-                        android:singleLine="true" />
-                </com.google.android.material.textfield.TextInputLayout>
+                        android:orientation="vertical"
+                        android:padding="20dp">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnSave"
-                    style="?attr/materialButtonOutlinedStyle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="حفظ الإعدادات" />
+                        <TextView
+                            android:id="@+id/tvService"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="خدمة إمكانية الوصول"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnAccess"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="match_parent"
+                            android:layout_height="52dp"
+                            android:layout_marginTop="12dp"
+                            android:text="فتح إعدادات إمكانية الوصول"
+                            app:cornerRadius="26dp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnOverlay"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="match_parent"
+                            android:layout_height="52dp"
+                            android:layout_marginTop="8dp"
+                            android:text="السماح بالظهور فوق التطبيقات"
+                            app:cornerRadius="26dp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
             </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- الأذونات -->
-        <com.google.android.material.card.MaterialCardView
-            style="?attr/materialCardViewOutlinedStyle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:id="@+id/tvService"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="خدمة إمكانية الوصول: غير مفعّلة"
-                    android:textAppearance="?attr/textAppearanceTitleMedium" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnAccess"
-                    style="?attr/materialButtonOutlinedStyle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="فتح إعدادات إمكانية الوصول" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnOverlay"
-                    style="?attr/materialButtonOutlinedStyle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="السماح بالظهور فوق التطبيقات (لفتح المحادثة تلقائياً)" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- التشغيل -->
-        <TextView
-            android:id="@+id/tvRunState"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="الحالة: متوقف"
-            android:textAppearance="?attr/textAppearanceTitleMedium" />
-
-        <TextView
-            android:id="@+id/tvLast"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="—" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnToggle"
-            android:layout_width="match_parent"
-            android:layout_height="64dp"
-            android:layout_marginTop="12dp"
-            android:text="ابدأ المراقبة" />
+        </ScrollView>
     </LinearLayout>
-</ScrollView>
+</FrameLayout>
