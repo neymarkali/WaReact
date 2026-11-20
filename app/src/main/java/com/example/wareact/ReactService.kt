@@ -164,7 +164,7 @@ class ReactService : AccessibilityService() {
             return
         }
         val root = rootInActiveWindow ?: return
-        if (!hasInputField(root)) return // خارج شاشة المحادثة (قائمة المحادثات مثلاً)
+        if (!inConversation(root)) return // خارج شاشة المحادثة (قائمة المحادثات مثلاً)
 
         // الفقاعة = أقرب أب يقبل الضغط المطوّل
         var bubble: AccessibilityNodeInfo? = null
@@ -205,9 +205,23 @@ class ReactService : AccessibilityService() {
         return false
     }
 
-    private fun hasInputField(root: AccessibilityNodeInfo): Boolean {
+    /** معرّف خانة الكتابة (نتعلمه مرة واحدة ثم نفحصه بطلب واحد سريع بدل مسح الشاشة كلها). */
+    private var inputId: String? = null
+
+    private fun inConversation(root: AccessibilityNodeInfo): Boolean {
+        val id = inputId
+        if (id != null) {
+            val l = root.findAccessibilityNodeInfosByViewId(id)
+            if (!l.isNullOrEmpty()) return true
+        }
+        // مسار بطيء: فقط عند الجهل بالمعرّف، أو خارج المحادثة
         var found = false
-        walk(root) { if (it.isEditable) found = true }
+        walk(root) {
+            if (!found && it.isEditable) {
+                found = true
+                inputId = it.viewIdResourceName
+            }
+        }
         return found
     }
 
@@ -358,7 +372,7 @@ class ReactService : AccessibilityService() {
         val viaAction = bubble?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
         val delay: Long
         if (viaAction) {
-            delay = 250
+            delay = 40
         } else {
             gesture(
                 bounds.centerX().toFloat(), bounds.centerY().toFloat(),
@@ -372,7 +386,8 @@ class ReactService : AccessibilityService() {
     private fun pickEmoji(attempt: Int) {
         try {
             val emoji = Prefs.emoji(this)
-            val node = findEmojiNode(emoji)
+            // بحث سريع بطلب واحد؛ وبعد عدة محاولات نلجأ للمسح الكامل كاحتياط
+            val node = findEmojiNode(emoji) ?: if (attempt >= 6) findEmojiSlow(emoji) else null
             if (node != null && clickNode(node)) {
                 if (!curManual) lastReactAt = System.currentTimeMillis()
                 Prefs.incReact(this)
@@ -381,8 +396,8 @@ class ReactService : AccessibilityService() {
                 requestScan(POLL)
                 return
             }
-            if (attempt < 15) {
-                main.postDelayed({ pickEmoji(attempt + 1) }, 100)
+            if (attempt < 40) {
+                main.postDelayed({ pickEmoji(attempt + 1) }, 50)
             } else {
                 // فشل: نسمح بإعادة المحاولة على نفس الرسالة بعد 8 ثوانٍ فقط
                 curSig?.let { seen[it] = System.currentTimeMillis() + 8_000L }
@@ -405,7 +420,39 @@ class ReactService : AccessibilityService() {
         "🙏" to listOf("folded hands", "pray", "thanks")
     )
 
+    private fun roots(): List<AccessibilityNodeInfo> {
+        val roots = ArrayList<AccessibilityNodeInfo>()
+        windows?.forEach { w -> w.root?.let { roots.add(it) } }
+        rootInActiveWindow?.let { roots.add(it) }
+        return roots
+    }
+
+    private fun matchesEmoji(n: AccessibilityNodeInfo, target: String, names: List<String>): Boolean {
+        val txt = n.text?.toString()?.replace("️", "")?.trim()
+        val desc = n.contentDescription?.toString()
+        val d = desc?.replace("️", "")?.trim()
+        return txt == target || d == target ||
+            (desc != null && desc.length <= 40 && names.any { desc.lowercase().contains(it) })
+    }
+
+    /** بحث سريع: طلب واحد لكل نافذة بدل المشي على كل العناصر. */
     private fun findEmojiNode(emoji: String): AccessibilityNodeInfo? {
+        val target = emoji.replace("️", "").trim()
+        val names = englishNames[target].orEmpty()
+        val queries = (listOf(emoji, target) + names).distinct()
+        for (r in roots()) {
+            for (q in queries) {
+                val list = r.findAccessibilityNodeInfosByText(q) ?: continue
+                for (n in list) {
+                    if (n.isVisibleToUser && matchesEmoji(n, target, names)) return n
+                }
+            }
+        }
+        return null
+    }
+
+    /** احتياط بطيء: المسح الكامل القديم. */
+    private fun findEmojiSlow(emoji: String): AccessibilityNodeInfo? {
         val target = emoji.replace("️", "").trim()
         val names = englishNames[target].orEmpty()
         val roots = ArrayList<AccessibilityNodeInfo>()
