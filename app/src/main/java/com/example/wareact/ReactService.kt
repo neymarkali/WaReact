@@ -45,6 +45,7 @@ class ReactService : AccessibilityService() {
     private var busySince = 0L
     private var curSig: String? = null
     private var curManual = false
+    private var curList: AccessibilityNodeInfo? = null
 
     private var scanQueued = false
     private var queuedDue = 0L
@@ -179,7 +180,8 @@ class ReactService : AccessibilityService() {
             diag("نقرة على ${shortName(src)} — ما لقيت رسالة تحتها")
             return
         }
-        if (!inList(bubble)) {
+        val list = listAncestor(bubble)
+        if (list == null) {
             diag("نقرة على ${shortName(src)} خارج قائمة الرسائل")
             return
         }
@@ -187,22 +189,40 @@ class ReactService : AccessibilityService() {
         lastManualAt = nowUp
         val r = Rect()
         bubble.getBoundsInScreen(r)
-        react(bubble, r, null, "نقرة يدوية — جارٍ التفاعل", true)
+        react(bubble, r, null, "نقرة يدوية — جارٍ التفاعل", true, list)
     }
 
     private fun shortName(n: AccessibilityNodeInfo): String =
         n.className?.toString()?.substringAfterLast('.') ?: "عنصر"
 
-    private fun inList(n: AccessibilityNodeInfo): Boolean {
+    /** قائمة الرسائل التي تحوي هذه الفقاعة (أو null إن لم توجد). */
+    private fun listAncestor(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         var p = n.parent
         var d = 0
         while (p != null && d < 8) {
             val cn = p.className?.toString().orEmpty()
-            if (p.isScrollable || cn.contains("RecyclerView") || cn.contains("ListView")) return true
+            if (p.isScrollable || cn.contains("RecyclerView") || cn.contains("ListView")) return p
+            p = p.parent
+            d++
+        }
+        return null
+    }
+
+    private fun isInside(n: AccessibilityNodeInfo, anc: AccessibilityNodeInfo): Boolean {
+        var p: AccessibilityNodeInfo? = n
+        var d = 0
+        while (p != null && d < 14) {
+            if (p == anc) return true
             p = p.parent
             d++
         }
         return false
+    }
+
+    /** عنصر داخل قائمة الرسائل (مثل فقاعة تفاعل موجودة تحت رسالة) وليس شريط الإيموجي. */
+    private fun inMsgList(n: AccessibilityNodeInfo): Boolean {
+        val l = curList ?: return false
+        return isInside(n, l)
     }
 
     /** معرّف خانة الكتابة (نتعلمه مرة واحدة ثم نفحصه بطلب واحد سريع بدل مسح الشاشة كلها). */
@@ -337,7 +357,11 @@ class ReactService : AccessibilityService() {
 
         if (!hasInput) return // لسنا داخل محادثة (مثلاً قائمة المحادثات): لا نتفاعل
         val target = best ?: return
-        react(target.bubble, target.bounds, target.sig, "رسالة فيها «${target.keyword}» — جارٍ التفاعل", false)
+        react(
+            target.bubble, target.bounds, target.sig,
+            "رسالة فيها «${target.keyword}» — جارٍ التفاعل", false,
+            target.bubble?.let { listAncestor(it) }
+        )
     }
 
     private fun findTime(c: AccessibilityNodeInfo): Pair<Int, String>? {
@@ -359,9 +383,11 @@ class ReactService : AccessibilityService() {
         bounds: Rect,
         sig: String?,
         label: String,
-        manual: Boolean
+        manual: Boolean,
+        list: AccessibilityNodeInfo?
     ) {
         busy = true
+        curList = list
         busySince = SystemClock.uptimeMillis()
         curSig = sig
         curManual = manual
@@ -444,7 +470,7 @@ class ReactService : AccessibilityService() {
             for (q in queries) {
                 val list = r.findAccessibilityNodeInfosByText(q) ?: continue
                 for (n in list) {
-                    if (n.isVisibleToUser && matchesEmoji(n, target, names)) return n
+                    if (n.isVisibleToUser && !inMsgList(n) && matchesEmoji(n, target, names)) return n
                 }
             }
         }
@@ -468,7 +494,7 @@ class ReactService : AccessibilityService() {
                 val d = desc?.replace("️", "")?.trim()
                 val hit = txt == target || d == target ||
                     (desc != null && desc.length <= 40 && names.any { desc.lowercase().contains(it) })
-                if (hit) found = n
+                if (hit && !inMsgList(n)) found = n
             }
             if (found != null) break
         }
