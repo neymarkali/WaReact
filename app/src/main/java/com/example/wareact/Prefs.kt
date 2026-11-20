@@ -23,12 +23,21 @@ object Prefs {
             .putString("keywords", keywords)
             .putString("emoji", emoji)
             .putInt("cooldown", cooldownSec)
+            .putLong("epoch", System.nanoTime())
             .apply()
     }
 
     // ---- التشغيل / الإيقاف اليدوي ----
+    // "epoch" يتغيّر مع كل تشغيل/إيقاف/حفظ، والخدمة تصفّر حالتها عند تغيّره
+    fun epoch(c: Context): Long = sp(c).getLong("epoch", 0L)
     fun isRunning(c: Context): Boolean = sp(c).getBoolean("running", false)
-    fun setRunning(c: Context, v: Boolean) = sp(c).edit().putBoolean("running", v).apply()
+    fun setRunning(c: Context, v: Boolean) =
+        sp(c).edit().putBoolean("running", v).putLong("epoch", System.nanoTime()).apply()
+
+    // ---- وضع النقر اليدوي ----
+    fun isManual(c: Context): Boolean = sp(c).getBoolean("manual", false)
+    fun setManual(c: Context, v: Boolean) =
+        sp(c).edit().putBoolean("manual", v).putLong("epoch", System.nanoTime()).apply()
 
     // ---- الحالة ----
     fun reactCount(c: Context): Int = sp(c).getInt("count", 0)

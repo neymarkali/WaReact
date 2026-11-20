@@ -8,6 +8,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityEvent
@@ -20,9 +21,10 @@ import kotlinx.coroutines.launch
 
 /**
  * يراقب واتساب:
- *  1) إشعار جديد فيه كلمة مفتاحية -> يفتح المحادثة تلقائياً.
- *  2) داخل المحادثة: رسالة واردة فيها كلمة مفتاحية -> ضغط مطوّل ثم اختيار الإيموجي فوراً.
- * ثم فترة خمول ومنع تكرار لنفس الرسالة. سطر الحالة بالتطبيق يشرح سبب أي تجاهل.
+ *  1) تلقائي: إشعار/رسالة واردة فيها كلمة مفتاحية -> ضغط مطوّل ثم اختيار الإيموجي.
+ *  2) يدوي: نقرة واحدة على أي رسالة داخل المحادثة -> يتفاعل عليها فوراً بالإيموجي المختار.
+ * حمايات ضد التعليق: مؤقّت مراقبة (watchdog)، التقاط كل الأخطاء، إعادة ضبط الحالة
+ * عند كل إيقاف/تشغيل أو حفظ إعدادات، وتقليل ضغط المسح (throttle).
  */
 class ReactService : AccessibilityService() {
 
@@ -35,22 +37,33 @@ class ReactService : AccessibilityService() {
 
     private val main = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** توقيع الرسالة -> وقت انتهاء تجاهلها (System.currentTimeMillis). */
     private val seen = HashMap<String, Long>()
+
     private var busy = false
+    private var busySince = 0L
+    private var curSig: String? = null
+    private var curManual = false
+
     private var scanQueued = false
-    private var pollQueued = false
+    private var queuedDue = 0L
+    private var lastScanAt = 0L
+
+    private var epoch = -1L
     private var refreshing = false
     private var lastRefreshTry = 0L
     private var lastReactAt = 0L
+    private var lastManualAt = 0L
     private var lastDiag = ""
 
     private val scanTask = Runnable {
         scanQueued = false
-        scan()
-    }
-    private val pollTask = Runnable {
-        pollQueued = false
-        scan()
+        try {
+            scan()
+        } catch (t: Throwable) {
+            fail("خطأ بالمسح", t)
+        }
     }
 
     override fun onServiceConnected() {
@@ -66,11 +79,25 @@ class ReactService : AccessibilityService() {
         super.onDestroy()
     }
 
+    // ------------------------------------------------------------------ الأحداث
+
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         e ?: return
+        try {
+            handle(e)
+        } catch (t: Throwable) {
+            fail("خطأ", t)
+        }
+    }
+
+    private fun handle(e: AccessibilityEvent) {
         val pkg = e.packageName?.toString() ?: return
         if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") return
-        if (!Prefs.isRunning(this)) return
+
+        val auto = Prefs.isRunning(this)
+        val manual = Prefs.isManual(this)
+        syncEpoch()
+        if (!auto && !manual) return
 
         maybeRefreshLicense()
         if (!LicenseManager.isActive(this)) {
@@ -78,11 +105,23 @@ class ReactService : AccessibilityService() {
             return
         }
 
-        if (e.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
-            onNotification(e)
-        } else if (!scanQueued) {
-            scanQueued = true
-            main.postDelayed(scanTask, 30)
+        when (e.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> if (manual) onManualTap(e)
+            AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> if (auto) onNotification(e)
+            else -> if (auto) requestScan(40)
+        }
+    }
+
+    /** أي إيقاف/تشغيل أو حفظ إعدادات من التطبيق يصفّر حالة الخدمة (يحل التعليق). */
+    private fun syncEpoch() {
+        val ep = Prefs.epoch(this)
+        if (ep != epoch) {
+            epoch = ep
+            seen.clear()
+            busy = false
+            lastReactAt = 0L
+            lastManualAt = 0L
+            lastDiag = ""
         }
     }
 
@@ -101,8 +140,8 @@ class ReactService : AccessibilityService() {
 
         val key = "N:" + TextUtil.normalize(text).take(80)
         val now = System.currentTimeMillis()
-        if (seen[key]?.let { now - it < 30_000 } == true) return
-        seen[key] = now
+        if ((seen[key] ?: 0L) > now) return
+        seen[key] = now + 30_000L
 
         Prefs.setStatus(this, "إشعار فيه «$kw» — جارٍ فتح المحادثة")
         try {
@@ -112,32 +151,126 @@ class ReactService : AccessibilityService() {
         }
     }
 
-    // ------------------------------------------------------------------ مسح المحادثة
+    // ------------------------------------------------------------------ وضع النقر اليدوي
+
+    private fun onManualTap(e: AccessibilityEvent) {
+        val nowUp = SystemClock.uptimeMillis()
+        if (busy) return
+        if (nowUp - lastManualAt < 1500) return
+
+        val src = e.source
+        if (src == null) {
+            diag("نقرة: لا يوجد عنصر مصدر")
+            return
+        }
+        val root = rootInActiveWindow ?: return
+        if (!hasInputField(root)) return // خارج شاشة المحادثة (قائمة المحادثات مثلاً)
+
+        // الفقاعة = أقرب أب يقبل الضغط المطوّل
+        var bubble: AccessibilityNodeInfo? = null
+        var cur: AccessibilityNodeInfo? = src
+        var d = 0
+        while (cur != null && d < 10) {
+            if (cur.isLongClickable) { bubble = cur; break }
+            cur = cur.parent
+            d++
+        }
+        if (bubble == null) {
+            diag("نقرة على ${shortName(src)} — ما لقيت رسالة تحتها")
+            return
+        }
+        if (!inList(bubble)) {
+            diag("نقرة على ${shortName(src)} خارج قائمة الرسائل")
+            return
+        }
+
+        lastManualAt = nowUp
+        val r = Rect()
+        bubble.getBoundsInScreen(r)
+        react(bubble, r, null, "نقرة يدوية — جارٍ التفاعل", true)
+    }
+
+    private fun shortName(n: AccessibilityNodeInfo): String =
+        n.className?.toString()?.substringAfterLast('.') ?: "عنصر"
+
+    private fun inList(n: AccessibilityNodeInfo): Boolean {
+        var p = n.parent
+        var d = 0
+        while (p != null && d < 8) {
+            val cn = p.className?.toString().orEmpty()
+            if (p.isScrollable || cn.contains("RecyclerView") || cn.contains("ListView")) return true
+            p = p.parent
+            d++
+        }
+        return false
+    }
+
+    private fun hasInputField(root: AccessibilityNodeInfo): Boolean {
+        var found = false
+        walk(root) { if (it.isEditable) found = true }
+        return found
+    }
+
+    // ------------------------------------------------------------------ مسح المحادثة (تلقائي)
+
+    private fun requestScan(delayMs: Long) {
+        val nowUp = SystemClock.uptimeMillis()
+        val due = nowUp + maxOf(delayMs, MIN_GAP - (nowUp - lastScanAt), 0L)
+        if (scanQueued) {
+            if (due >= queuedDue) return
+            main.removeCallbacks(scanTask)
+        }
+        scanQueued = true
+        queuedDue = due
+        main.postAtTime(scanTask, due)
+    }
 
     private fun scan() {
-        if (busy) return
+        val nowUp = SystemClock.uptimeMillis()
+        syncEpoch()
+
+        if (busy) {
+            if (nowUp - busySince > BUSY_LIMIT) {
+                busy = false
+                diag("إعادة ضبط تلقائية بعد تعليق")
+            } else {
+                requestScan(300)
+                return
+            }
+        }
         if (!Prefs.isRunning(this) || !LicenseManager.isActive(this)) return
         val root = rootInActiveWindow ?: return
         val pkg = root.packageName?.toString()
         if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") return
 
-        // استمر بالمسح كل 0.4 ثانية طالما واتساب أمامك (حتى لو فاتتنا أحداث)
-        schedulePoll()
-        if (lastDiag.isEmpty()) diag("أراقب شاشة واتساب… بانتظار رسالة فيها كلمة مفتاحية")
-        if (inCooldown()) return
+        lastScanAt = nowUp
+        requestScan(POLL) // يبقي المسح الدوري شغّالاً طالما واتساب أمامك
 
         val kws = Prefs.keywords(this)
         if (kws.isEmpty()) {
             diag("لا توجد كلمات مفتاحية محفوظة")
             return
         }
+        if (inCooldown()) {
+            val left = (Prefs.cooldownSec(this) * 1000L - (System.currentTimeMillis() - lastReactAt)) / 1000 + 1
+            diag("⏳ فترة الخمول: باقي $left ث")
+            return
+        }
+        if (lastDiag.isEmpty() || lastDiag.startsWith("⏳")) {
+            diag("أراقب شاشة واتساب… بانتظار رسالة فيها كلمة مفتاحية")
+        }
 
         val width = resources.displayMetrics.widthPixels
         val rtl = resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
-        pruneSeen()
+        val now = System.currentTimeMillis()
+        pruneSeen(now)
 
+        var hasInput = false
         var best: Cand? = null
         walk(root) { node ->
+            // خانة الكتابة: نعرف منها إننا داخل محادثة، ولا نطابق نصها
+            if (node.isEditable) { hasInput = true; return@walk }
+
             val t = node.text?.toString()
             if (t.isNullOrEmpty() || t.length < 2) return@walk
             val kw = TextUtil.firstMatch(t, kws) ?: return@walk
@@ -152,8 +285,6 @@ class ReactService : AccessibilityService() {
                 cur = p
                 depth++
             }
-            // إن وُجد الوقت وكان أقدم من دقيقتين = رسالة قديمة نتجاهلها.
-            // إن لم يوجد وقت نتفاعل فوراً.
             if (tm != null && !TextUtil.isFresh(tm.first)) {
                 diag("«$kw» رسالة قديمة (${tm.second}) — أتفاعل فقط مع آخر دقيقتين")
                 return@walk
@@ -172,7 +303,7 @@ class ReactService : AccessibilityService() {
             }
 
             val sig = TextUtil.normalize(t).take(80) + "|" + (tm?.second ?: "")
-            if (seen.containsKey(sig)) return@walk
+            if ((seen[sig] ?: 0L) > now) return@walk
 
             // الفقاعة = أقرب أب يقبل الضغط المطوّل (إن وُجد)
             var bubble: AccessibilityNodeInfo? = null
@@ -190,8 +321,9 @@ class ReactService : AccessibilityService() {
             }
         }
 
+        if (!hasInput) return // لسنا داخل محادثة (مثلاً قائمة المحادثات): لا نتفاعل
         val target = best ?: return
-        react(target)
+        react(target.bubble, target.bounds, target.sig, "رسالة فيها «${target.keyword}» — جارٍ التفاعل", false)
     }
 
     private fun findTime(c: AccessibilityNodeInfo): Pair<Int, String>? {
@@ -208,19 +340,28 @@ class ReactService : AccessibilityService() {
 
     // ------------------------------------------------------------------ التفاعل
 
-    private fun react(c: Cand) {
+    private fun react(
+        bubble: AccessibilityNodeInfo?,
+        bounds: Rect,
+        sig: String?,
+        label: String,
+        manual: Boolean
+    ) {
         busy = true
-        seen[c.sig] = System.currentTimeMillis()
-        Prefs.setStatus(this, "رسالة فيها «${c.keyword}» — جارٍ التفاعل")
+        busySince = SystemClock.uptimeMillis()
+        curSig = sig
+        curManual = manual
+        if (sig != null) seen[sig] = System.currentTimeMillis() + 15 * 60_000L
+        Prefs.setStatus(this, label)
         lastDiag = "react"
 
-        val viaAction = c.bubble?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
+        val viaAction = bubble?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
         val delay: Long
         if (viaAction) {
             delay = 250
         } else {
             gesture(
-                c.bounds.centerX().toFloat(), c.bounds.centerY().toFloat(),
+                bounds.centerX().toFloat(), bounds.centerY().toFloat(),
                 ViewConfiguration.getLongPressTimeout() + 250L
             )
             delay = ViewConfiguration.getLongPressTimeout() + 500L
@@ -229,29 +370,35 @@ class ReactService : AccessibilityService() {
     }
 
     private fun pickEmoji(attempt: Int) {
-        val emoji = Prefs.emoji(this)
-        val node = findEmojiNode(emoji)
-        if (node != null && clickNode(node)) {
-            lastReactAt = System.currentTimeMillis()
-            Prefs.incReact(this)
-            Prefs.setStatus(this, "تم التفاعل $emoji")
-            busy = false
-            schedulePoll()
-            return
-        }
-        if (attempt < 15) {
-            main.postDelayed({ pickEmoji(attempt + 1) }, 100)
-        } else {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            Prefs.setStatus(this, "لم أجد $emoji في شريط التفاعلات (استعمل إيموجي من الشريط السريع)")
-            busy = false
-            schedulePoll()
+        try {
+            val emoji = Prefs.emoji(this)
+            val node = findEmojiNode(emoji)
+            if (node != null && clickNode(node)) {
+                if (!curManual) lastReactAt = System.currentTimeMillis()
+                Prefs.incReact(this)
+                Prefs.setStatus(this, if (curManual) "تم التفاعل يدوياً $emoji" else "تم التفاعل $emoji")
+                busy = false
+                requestScan(POLL)
+                return
+            }
+            if (attempt < 15) {
+                main.postDelayed({ pickEmoji(attempt + 1) }, 100)
+            } else {
+                // فشل: نسمح بإعادة المحاولة على نفس الرسالة بعد 8 ثوانٍ فقط
+                curSig?.let { seen[it] = System.currentTimeMillis() + 8_000L }
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                Prefs.setStatus(this, "لم أجد $emoji في شريط التفاعلات (استعمل إيموجي من الشريط السريع)")
+                busy = false
+                requestScan(POLL)
+            }
+        } catch (t: Throwable) {
+            fail("خطأ بالتفاعل", t)
         }
     }
 
     private val englishNames = mapOf(
         "👍" to listOf("thumbs up", "like"),
-        "❤️" to listOf("red heart", "heart", "love"),
+        "❤" to listOf("red heart", "heart", "love"),
         "😂" to listOf("tears of joy", "laughing"),
         "😮" to listOf("open mouth", "surprised"),
         "😢" to listOf("crying", "sad"),
@@ -259,7 +406,7 @@ class ReactService : AccessibilityService() {
     )
 
     private fun findEmojiNode(emoji: String): AccessibilityNodeInfo? {
-        val target = emoji.replace("\uFE0F", "").trim()
+        val target = emoji.replace("️", "").trim()
         val names = englishNames[target].orEmpty()
         val roots = ArrayList<AccessibilityNodeInfo>()
         windows?.forEach { w -> w.root?.let { roots.add(it) } }
@@ -269,9 +416,9 @@ class ReactService : AccessibilityService() {
         for (r in roots) {
             walk(r) { n ->
                 if (found != null) return@walk
-                val txt = n.text?.toString()?.replace("\uFE0F", "")?.trim()
+                val txt = n.text?.toString()?.replace("️", "")?.trim()
                 val desc = n.contentDescription?.toString()
-                val d = desc?.replace("\uFE0F", "")?.trim()
+                val d = desc?.replace("️", "")?.trim()
                 val hit = txt == target || d == target ||
                     (desc != null && desc.length <= 40 && names.any { desc.lowercase().contains(it) })
                 if (hit) found = n
@@ -304,6 +451,11 @@ class ReactService : AccessibilityService() {
 
     // ------------------------------------------------------------------ أدوات
 
+    private fun fail(msg: String, t: Throwable) {
+        busy = false
+        Prefs.setStatus(this, "$msg: ${t.javaClass.simpleName} — أكمل العمل")
+    }
+
     private fun diag(msg: String) {
         if (msg != lastDiag) {
             lastDiag = msg
@@ -311,23 +463,17 @@ class ReactService : AccessibilityService() {
         }
     }
 
-    private fun schedulePoll() {
-        if (!pollQueued) {
-            pollQueued = true
-            main.postDelayed(pollTask, 400)
-        }
-    }
-
     private fun inCooldown(): Boolean =
         System.currentTimeMillis() - lastReactAt < Prefs.cooldownSec(this) * 1000L
 
-    private fun pruneSeen() {
-        val now = System.currentTimeMillis()
-        seen.entries.removeAll { now - it.value > 15 * 60_000L }
+    private fun pruneSeen(now: Long) {
+        seen.entries.removeAll { it.value <= now }
     }
 
+    /** نمشي فقط على العناصر الظاهرة على الشاشة (أخف بكثير ولا يعلّق الخدمة). */
     private fun walk(n: AccessibilityNodeInfo?, depth: Int = 0, f: (AccessibilityNodeInfo) -> Unit) {
         if (n == null || depth > 40) return
+        if (!n.isVisibleToUser) return
         f(n)
         for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1, f)
     }
@@ -346,5 +492,11 @@ class ReactService : AccessibilityService() {
                 refreshing = false
             }
         }
+    }
+
+    private companion object {
+        const val POLL = 400L        // مسح كل 0.4 ثانية
+        const val MIN_GAP = 250L     // أقل فاصل بين مسحين
+        const val BUSY_LIMIT = 5000L // أقصى مدة لعملية تفاعل قبل إعادة الضبط
     }
 }

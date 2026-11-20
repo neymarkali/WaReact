@@ -10,11 +10,13 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.view.inputmethod.InputMethodManager
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.wareact.databinding.ActivityMainBinding
 import com.google.android.material.chip.Chip
+import com.google.android.material.materialswitch.MaterialSwitch
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -62,6 +64,33 @@ class MainActivity : AppCompatActivity() {
         b.tvCooldownVal.text = "$cd ثانية"
         b.sliderCooldown.addOnChangeListener { _, v, _ ->
             b.tvCooldownVal.text = "${v.toInt()} ثانية"
+        }
+
+        // مفتاح وضع النقر اليدوي (قبل زر المراقبة)
+        val sw = MaterialSwitch(this).apply {
+            text = "وضع النقر اليدوي: اضغط على أي رسالة داخل المحادثة وتتفاعل فوراً"
+            textSize = 14f
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = Prefs.isManual(this@MainActivity)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (14 * resources.displayMetrics.density).toInt() }
+        }
+        val holder = b.btnToggle.parent as LinearLayout
+        holder.addView(sw, holder.indexOfChild(b.btnToggle))
+        sw.setOnCheckedChangeListener { _, on ->
+            if (on && !LicenseManager.isActive(this)) {
+                sw.isChecked = false
+                toast("فعّل كود الترخيص أولاً")
+            } else if (on && !serviceEnabled()) {
+                sw.isChecked = false
+                toast("فعّل خدمة إمكانية الوصول أولاً")
+            } else {
+                save()
+                Prefs.setManual(this, on)
+                Prefs.setStatus(this, if (on) "وضع النقر اليدوي شغّال" else "وضع النقر اليدوي متوقف")
+            }
         }
 
         b.btnActivate.setOnClickListener { activate() }
