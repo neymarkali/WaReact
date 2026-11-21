@@ -523,7 +523,7 @@ class ReactService : AccessibilityService() {
         try {
             val emoji = Prefs.emoji(this)
             // بحث سريع بطلب واحد؛ وبعد عدة محاولات نلجأ للمسح الكامل كاحتياط
-            val node = findEmojiNode(emoji) ?: if (attempt >= 8) findEmojiSlow(emoji) else null
+            val node = findEmojiNode(emoji) ?: if (attempt >= 60) findEmojiSlow(emoji) else null
             if (node != null && clickNode(node)) {
                 val ms = SystemClock.uptimeMillis() - curT0
                 if (!curManual) lastReactAt = System.currentTimeMillis()
@@ -538,8 +538,8 @@ class ReactService : AccessibilityService() {
                 requestScan(POLL)
                 return
             }
-            if (attempt < 70) {
-                main.postDelayed({ pickEmoji(attempt + 1) }, 30)
+            if (attempt < 500) {
+                main.postDelayed({ pickEmoji(attempt + 1) }, 4)
             } else {
                 // فشل: نسمح بإعادة المحاولة على نفس الرسالة بعد 8 ثوانٍ فقط
                 curSig?.let { seen[it] = System.currentTimeMillis() + 8_000L }
@@ -588,7 +588,7 @@ class ReactService : AccessibilityService() {
             for (q in queries) {
                 val list = r.findAccessibilityNodeInfosByText(q) ?: continue
                 for (n in list) {
-                    if (n.isVisibleToUser && !inMsgList(n) && matchesEmoji(n, target, names)) return n
+                    if (!inMsgList(n) && matchesEmoji(n, target, names)) return n
                 }
             }
         }
@@ -677,8 +677,8 @@ class ReactService : AccessibilityService() {
     }
 
     private companion object {
-        const val POLL = 300L            // مسح دوري كل 0.3 ثانية
-        const val MIN_GAP = 120L         // أقل فاصل بين مسحين
+        const val POLL = 150L            // مسح دوري كل 0.3 ثانية
+        const val MIN_GAP = 60L         // أقل فاصل بين مسحين
         const val BUSY_LIMIT = 5000L     // أقصى مدة لعملية تفاعل قبل إعادة الضبط
         const val MANUAL_PAUSE = 10_000L // توقف النقر اليدوي بعد كل تفاعل
         const val SESSION_GAP = 3000L    // غياب خانة الكتابة أكثر من هذا = دخول محادثة جديدة
