@@ -21,16 +21,19 @@ import kotlinx.coroutines.launch
 
 /**
  * يراقب واتساب:
- *  1) تلقائي: إشعار/رسالة واردة فيها كلمة مفتاحية -> ضغط مطوّل ثم اختيار الإيموجي.
- *  2) يدوي: نقرة واحدة على أي رسالة داخل المحادثة -> يتفاعل عليها فوراً بالإيموجي المختار.
- * حمايات ضد التعليق: مؤقّت مراقبة (watchdog)، التقاط كل الأخطاء، إعادة ضبط الحالة
- * عند كل إيقاف/تشغيل أو حفظ إعدادات، وتقليل ضغط المسح (throttle).
+ *  1) تلقائي: رسالة واردة جديدة فيها كلمة مفتاحية -> ضغط مطوّل ثم اختيار الإيموجي.
+ *     الرسائل الموجودة لحظة فتح المحادثة تُتجاهل (إلا إذا فُتحت من إشعار فيه الكلمة).
+ *  2) يدوي: نقرة واحدة على رسالة -> يتفاعل عليها فوراً، ثم يتوقف 10 ثوانٍ.
+ *     يتجاهل الرسالة التي تفاعلت عليها سابقاً.
+ * حمايات: مؤقّت مراقبة (watchdog)، التقاط كل الأخطاء، تصفير الحالة عند كل إيقاف/تشغيل/حفظ،
+ * تقليل ضغط المسح، ولا يتفاعل خارج شاشة المحادثة.
  */
 class ReactService : AccessibilityService() {
 
     private class Cand(
         val sig: String,
         val keyword: String,
+        val text: String,
         val bubble: AccessibilityNodeInfo?,
         val bounds: Rect
     )
@@ -41,22 +44,35 @@ class ReactService : AccessibilityService() {
     /** توقيع الرسالة -> وقت انتهاء تجاهلها (System.currentTimeMillis). */
     private val seen = HashMap<String, Long>()
 
+    /** رسائل تفاعلنا عليها (حتى 400). */
+    private val mine = LinkedHashSet<String>()
+
     private var busy = false
     private var busySince = 0L
     private var curSig: String? = null
     private var curManual = false
     private var curList: AccessibilityNodeInfo? = null
+    private var curT0 = 0L
 
     private var scanQueued = false
     private var queuedDue = 0L
     private var lastScanAt = 0L
 
+    // جلسة المحادثة: نتجاهل الرسائل الموجودة عند فتحها
+    private var forceNewSession = false
+    private var lastHasInputAt = 0L
+    private var sessionStart = 0L
+    private var armedUntil = 0L
+    private var armedText = ""
+
     private var epoch = -1L
     private var refreshing = false
     private var lastRefreshTry = 0L
     private var lastReactAt = 0L
+    private var manualPauseUntil = 0L
     private var lastManualAt = 0L
     private var lastDiag = ""
+    private var inputId: String? = null
 
     private val scanTask = Runnable {
         scanQueued = false
@@ -109,7 +125,13 @@ class ReactService : AccessibilityService() {
         when (e.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> if (manual) onManualTap(e)
             AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> if (auto) onNotification(e)
-            else -> if (auto) requestScan(40)
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> if (auto) {
+                if (e.className?.toString()?.contains("onversation", ignoreCase = true) == true) {
+                    forceNewSession = true
+                }
+                requestScan(20)
+            }
+            else -> if (auto) requestScan(20)
         }
     }
 
@@ -122,6 +144,9 @@ class ReactService : AccessibilityService() {
             busy = false
             lastReactAt = 0L
             lastManualAt = 0L
+            manualPauseUntil = 0L
+            lastHasInputAt = 0L
+            armedUntil = 0L
             lastDiag = ""
         }
     }
@@ -144,6 +169,10 @@ class ReactService : AccessibilityService() {
         if ((seen[key] ?: 0L) > now) return
         seen[key] = now + 30_000L
 
+        // نسمح بالتفاعل مع هذه الرسالة بالذات عند فتح المحادثة من الإشعار
+        armedText = TextUtil.normalize(text)
+        armedUntil = now + 20_000L
+
         Prefs.setStatus(this, "إشعار فيه «$kw» — جارٍ فتح المحادثة")
         try {
             n.contentIntent?.send()
@@ -152,11 +181,21 @@ class ReactService : AccessibilityService() {
         }
     }
 
+    private fun armedMatches(t: String): Boolean {
+        if (armedText.isEmpty()) return false
+        val m = TextUtil.normalize(t)
+        return m.isNotEmpty() && (armedText.contains(m) || m.contains(armedText))
+    }
+
     // ------------------------------------------------------------------ وضع النقر اليدوي
 
     private fun onManualTap(e: AccessibilityEvent) {
         val nowUp = SystemClock.uptimeMillis()
         if (busy) return
+        if (nowUp < manualPauseUntil) {
+            diag("⏸ النقر اليدوي متوقف: باقي ${(manualPauseUntil - nowUp) / 1000 + 1} ث")
+            return
+        }
         if (nowUp - lastManualAt < 1500) return
 
         val src = e.source
@@ -180,28 +219,47 @@ class ReactService : AccessibilityService() {
             diag("نقرة على ${shortName(src)} — ما لقيت رسالة تحتها")
             return
         }
-        val list = listAncestor(bubble)
-        if (list == null) {
+        val la = listAncestor(bubble)
+        if (la == null) {
             diag("نقرة على ${shortName(src)} خارج قائمة الرسائل")
+            return
+        }
+        val list = la.first
+        val item = la.second
+
+        // نتجاهل الرسالة التي تفاعلنا عليها سابقاً
+        val sig = messageSig(item)
+        if (sig != null && mine.contains(sig)) {
+            diag("عليها تفاعل منك مسبقاً — تجاهلتها")
+            return
+        }
+        if (hasSameReaction(item, Prefs.emoji(this))) {
+            diag("عليها نفس التفاعل مسبقاً — تجاهلتها")
             return
         }
 
         lastManualAt = nowUp
         val r = Rect()
         bubble.getBoundsInScreen(r)
-        react(bubble, r, null, "نقرة يدوية — جارٍ التفاعل", true, list)
+        react(bubble, r, sig, "نقرة يدوية — جارٍ التفاعل", true, list, e.eventTime)
     }
 
     private fun shortName(n: AccessibilityNodeInfo): String =
         n.className?.toString()?.substringAfterLast('.') ?: "عنصر"
 
-    /** قائمة الرسائل التي تحوي هذه الفقاعة (أو null إن لم توجد). */
-    private fun listAncestor(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    /** قائمة الرسائل + عنصر القائمة (صف الرسالة) الذي يحوي هذه الفقاعة. */
+    private fun listAncestor(
+        n: AccessibilityNodeInfo
+    ): Pair<AccessibilityNodeInfo, AccessibilityNodeInfo>? {
+        var prev: AccessibilityNodeInfo = n
         var p = n.parent
         var d = 0
         while (p != null && d < 8) {
             val cn = p.className?.toString().orEmpty()
-            if (p.isScrollable || cn.contains("RecyclerView") || cn.contains("ListView")) return p
+            if (p.isScrollable || cn.contains("RecyclerView") || cn.contains("ListView")) {
+                return Pair(p, prev)
+            }
+            prev = p
             p = p.parent
             d++
         }
@@ -225,16 +283,43 @@ class ReactService : AccessibilityService() {
         return isInside(n, l)
     }
 
-    /** معرّف خانة الكتابة (نتعلمه مرة واحدة ثم نفحصه بطلب واحد سريع بدل مسح الشاشة كلها). */
-    private var inputId: String? = null
+    /** توقيع الرسالة = أطول نص فيها + وقتها. */
+    private fun messageSig(item: AccessibilityNodeInfo): String? {
+        var longest = ""
+        walk(item) { n ->
+            val s = n.text?.toString()
+            if (!s.isNullOrBlank() && TextUtil.parseMinutes(s.trim()) == null && s.length > longest.length) {
+                longest = s
+            }
+        }
+        if (longest.isEmpty()) return null
+        val tm = findTime(item)?.second ?: ""
+        return TextUtil.normalize(longest).take(80) + "|" + tm
+    }
 
+    /** هل تحت الرسالة فقاعة تفاعل بنفس الإيموجي؟ (الضغط عليها مرة ثانية يلغي التفاعل) */
+    private fun hasSameReaction(item: AccessibilityNodeInfo, emoji: String): Boolean {
+        val target = emoji.replace("️", "")
+        if (target.isEmpty()) return false
+        var found = false
+        walk(item) { n ->
+            if (found) return@walk
+            val t = n.text?.toString()?.replace("️", "").orEmpty()
+            val d = n.contentDescription?.toString()?.replace("️", "").orEmpty()
+            val hit = (t.length in 1..6 && t.contains(target)) ||
+                (d.length in 1..40 && d.contains(target))
+            if (hit && (n.isClickable || n.parent?.isClickable == true)) found = true
+        }
+        return found
+    }
+
+    /** نتعلم معرّف خانة الكتابة مرة واحدة ثم نفحصه بطلب واحد سريع. */
     private fun inConversation(root: AccessibilityNodeInfo): Boolean {
         val id = inputId
         if (id != null) {
             val l = root.findAccessibilityNodeInfosByViewId(id)
             if (!l.isNullOrEmpty()) return true
         }
-        // مسار بطيء: فقط عند الجهل بالمعرّف، أو خارج المحادثة
         var found = false
         walk(root) {
             if (!found && it.isEditable) {
@@ -268,7 +353,7 @@ class ReactService : AccessibilityService() {
                 busy = false
                 diag("إعادة ضبط تلقائية بعد تعليق")
             } else {
-                requestScan(300)
+                requestScan(200)
                 return
             }
         }
@@ -300,7 +385,7 @@ class ReactService : AccessibilityService() {
         pruneSeen(now)
 
         var hasInput = false
-        var best: Cand? = null
+        val cands = ArrayList<Cand>()
         walk(root) { node ->
             // خانة الكتابة: نعرف منها إننا داخل محادثة، ولا نطابق نصها
             if (node.isEditable) { hasInput = true; return@walk }
@@ -319,8 +404,8 @@ class ReactService : AccessibilityService() {
                 cur = p
                 depth++
             }
-            if (tm != null && !TextUtil.isFresh(tm.first)) {
-                diag("«$kw» رسالة قديمة (${tm.second}) — أتفاعل فقط مع آخر دقيقتين")
+            if (tm != null && !TextUtil.isFresh(tm.first, 1)) {
+                diag("«$kw» رسالة قديمة (${tm.second}) — أتفاعل فقط مع الجديدة")
                 return@walk
             }
 
@@ -337,7 +422,6 @@ class ReactService : AccessibilityService() {
             }
 
             val sig = TextUtil.normalize(t).take(80) + "|" + (tm?.second ?: "")
-            if ((seen[sig] ?: 0L) > now) return@walk
 
             // الفقاعة = أقرب أب يقبل الضغط المطوّل (إن وُجد)
             var bubble: AccessibilityNodeInfo? = null
@@ -348,19 +432,37 @@ class ReactService : AccessibilityService() {
                 a = a.parent
                 d++
             }
-
-            val current = best
-            if (current == null || tb.bottom > current.bounds.bottom) {
-                best = Cand(sig, kw, bubble, tb)
-            }
+            cands.add(Cand(sig, kw, t, bubble, tb))
         }
 
         if (!hasInput) return // لسنا داخل محادثة (مثلاً قائمة المحادثات): لا نتفاعل
+
+        // جلسة جديدة = دخول محادثة (أو عودة لها بعد غياب): نتجاهل ما كان موجوداً فيها
+        val newSession = forceNewSession || nowUp - lastHasInputAt > SESSION_GAP
+        lastHasInputAt = nowUp
+        if (newSession) {
+            forceNewSession = false
+            sessionStart = nowUp
+        }
+        val inBaseline = nowUp - sessionStart < BASELINE_MS
+        val armed = now < armedUntil
+
+        var best: Cand? = null
+        for (c in cands) {
+            if ((seen[c.sig] ?: 0L) > now) continue
+            if (mine.contains(c.sig)) continue
+            if (inBaseline && !(armed && armedMatches(c.text))) {
+                seen[c.sig] = now + 15 * 60_000L // كانت موجودة قبلنا: لا نتفاعل
+                continue
+            }
+            if (best == null || c.bounds.bottom > best.bounds.bottom) best = c
+        }
         val target = best ?: return
+        armedUntil = 0L
         react(
             target.bubble, target.bounds, target.sig,
             "رسالة فيها «${target.keyword}» — جارٍ التفاعل", false,
-            target.bubble?.let { listAncestor(it) }
+            target.bubble?.let { listAncestor(it)?.first }, nowUp
         )
     }
 
@@ -384,49 +486,64 @@ class ReactService : AccessibilityService() {
         sig: String?,
         label: String,
         manual: Boolean,
-        list: AccessibilityNodeInfo?
+        list: AccessibilityNodeInfo?,
+        t0: Long
     ) {
         busy = true
-        curList = list
         busySince = SystemClock.uptimeMillis()
         curSig = sig
         curManual = manual
+        curList = list
+        curT0 = t0
         if (sig != null) seen[sig] = System.currentTimeMillis() + 15 * 60_000L
         Prefs.setStatus(this, label)
         lastDiag = "react"
 
         val viaAction = bubble?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
-        val delay: Long
         if (viaAction) {
-            delay = 40
+            main.post { pickEmoji(0) }
         } else {
             gesture(
                 bounds.centerX().toFloat(), bounds.centerY().toFloat(),
                 ViewConfiguration.getLongPressTimeout() + 250L
             )
-            delay = ViewConfiguration.getLongPressTimeout() + 500L
+            main.postDelayed({ pickEmoji(0) }, ViewConfiguration.getLongPressTimeout() + 400L)
         }
-        main.postDelayed({ pickEmoji(0) }, delay)
+    }
+
+    private fun remember(sig: String) {
+        mine.add(sig)
+        if (mine.size > 400) {
+            val it = mine.iterator()
+            if (it.hasNext()) { it.next(); it.remove() }
+        }
     }
 
     private fun pickEmoji(attempt: Int) {
         try {
             val emoji = Prefs.emoji(this)
             // بحث سريع بطلب واحد؛ وبعد عدة محاولات نلجأ للمسح الكامل كاحتياط
-            val node = findEmojiNode(emoji) ?: if (attempt >= 6) findEmojiSlow(emoji) else null
+            val node = findEmojiNode(emoji) ?: if (attempt >= 8) findEmojiSlow(emoji) else null
             if (node != null && clickNode(node)) {
+                val ms = SystemClock.uptimeMillis() - curT0
                 if (!curManual) lastReactAt = System.currentTimeMillis()
+                curSig?.let { remember(it) }
+                if (curManual) manualPauseUntil = SystemClock.uptimeMillis() + MANUAL_PAUSE
                 Prefs.incReact(this)
-                Prefs.setStatus(this, if (curManual) "تم التفاعل يدوياً $emoji" else "تم التفاعل $emoji")
+                Prefs.setStatus(
+                    this,
+                    (if (curManual) "تم التفاعل يدوياً $emoji" else "تم التفاعل $emoji") + " (${ms}ms)"
+                )
                 busy = false
                 requestScan(POLL)
                 return
             }
-            if (attempt < 40) {
-                main.postDelayed({ pickEmoji(attempt + 1) }, 50)
+            if (attempt < 70) {
+                main.postDelayed({ pickEmoji(attempt + 1) }, 30)
             } else {
                 // فشل: نسمح بإعادة المحاولة على نفس الرسالة بعد 8 ثوانٍ فقط
                 curSig?.let { seen[it] = System.currentTimeMillis() + 8_000L }
+                if (curManual) manualPauseUntil = SystemClock.uptimeMillis() + MANUAL_PAUSE
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 Prefs.setStatus(this, "لم أجد $emoji في شريط التفاعلات (استعمل إيموجي من الشريط السريع)")
                 busy = false
@@ -446,10 +563,11 @@ class ReactService : AccessibilityService() {
         "🙏" to listOf("folded hands", "pray", "thanks")
     )
 
+    /** النافذة النشطة أولاً (الأسرع) ثم باقي النوافذ. */
     private fun roots(): List<AccessibilityNodeInfo> {
         val roots = ArrayList<AccessibilityNodeInfo>()
-        windows?.forEach { w -> w.root?.let { roots.add(it) } }
         rootInActiveWindow?.let { roots.add(it) }
+        windows?.forEach { w -> w.root?.let { roots.add(it) } }
         return roots
     }
 
@@ -477,24 +595,15 @@ class ReactService : AccessibilityService() {
         return null
     }
 
-    /** احتياط بطيء: المسح الكامل القديم. */
+    /** احتياط بطيء: المسح الكامل. */
     private fun findEmojiSlow(emoji: String): AccessibilityNodeInfo? {
         val target = emoji.replace("️", "").trim()
         val names = englishNames[target].orEmpty()
-        val roots = ArrayList<AccessibilityNodeInfo>()
-        windows?.forEach { w -> w.root?.let { roots.add(it) } }
-        rootInActiveWindow?.let { roots.add(it) }
-
         var found: AccessibilityNodeInfo? = null
-        for (r in roots) {
+        for (r in roots()) {
             walk(r) { n ->
                 if (found != null) return@walk
-                val txt = n.text?.toString()?.replace("️", "")?.trim()
-                val desc = n.contentDescription?.toString()
-                val d = desc?.replace("️", "")?.trim()
-                val hit = txt == target || d == target ||
-                    (desc != null && desc.length <= 40 && names.any { desc.lowercase().contains(it) })
-                if (hit && !inMsgList(n)) found = n
+                if (matchesEmoji(n, target, names) && !inMsgList(n)) found = n
             }
             if (found != null) break
         }
@@ -568,8 +677,11 @@ class ReactService : AccessibilityService() {
     }
 
     private companion object {
-        const val POLL = 400L        // مسح كل 0.4 ثانية
-        const val MIN_GAP = 250L     // أقل فاصل بين مسحين
-        const val BUSY_LIMIT = 5000L // أقصى مدة لعملية تفاعل قبل إعادة الضبط
+        const val POLL = 300L            // مسح دوري كل 0.3 ثانية
+        const val MIN_GAP = 120L         // أقل فاصل بين مسحين
+        const val BUSY_LIMIT = 5000L     // أقصى مدة لعملية تفاعل قبل إعادة الضبط
+        const val MANUAL_PAUSE = 10_000L // توقف النقر اليدوي بعد كل تفاعل
+        const val SESSION_GAP = 3000L    // غياب خانة الكتابة أكثر من هذا = دخول محادثة جديدة
+        const val BASELINE_MS = 1500L    // مدة تجاهل الرسائل الموجودة عند فتح المحادثة
     }
 }

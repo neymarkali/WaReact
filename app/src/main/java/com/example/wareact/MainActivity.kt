@@ -1,20 +1,26 @@
 package com.example.wareact
 
+import android.app.StatusBarManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.drawable.Icon
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.view.inputmethod.InputMethodManager
+import android.widget.CompoundButton
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.wareact.databinding.ActivityMainBinding
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.Chip
 import com.google.android.material.materialswitch.MaterialSwitch
 import kotlinx.coroutines.launch
@@ -31,6 +37,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private val emojis = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
+    private lateinit var swManual: MaterialSwitch
+    private lateinit var manualListener: CompoundButton.OnCheckedChangeListener
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,25 +74,24 @@ class MainActivity : AppCompatActivity() {
             b.tvCooldownVal.text = "${v.toInt()} ثانية"
         }
 
-        // مفتاح وضع النقر اليدوي (قبل زر المراقبة)
-        val sw = MaterialSwitch(this).apply {
-            text = "وضع النقر اليدوي: اضغط على أي رسالة داخل المحادثة وتتفاعل فوراً"
+        // مفتاح وضع النقر اليدوي + زر إضافة المربعات للبرداية (قبل زر المراقبة)
+        val dp = resources.displayMetrics.density
+        swManual = MaterialSwitch(this).apply {
+            text = "وضع النقر اليدوي: اضغط على رسالة داخل المحادثة وتتفاعل فوراً"
             textSize = 14f
             setTextColor(getColor(R.color.text_primary))
             isChecked = Prefs.isManual(this@MainActivity)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (14 * resources.displayMetrics.density).toInt() }
+            ).apply { topMargin = (14 * dp).toInt() }
         }
-        val holder = b.btnToggle.parent as LinearLayout
-        holder.addView(sw, holder.indexOfChild(b.btnToggle))
-        sw.setOnCheckedChangeListener { _, on ->
+        manualListener = CompoundButton.OnCheckedChangeListener { _, on ->
             if (on && !LicenseManager.isActive(this)) {
-                sw.isChecked = false
+                setManualChecked(false)
                 toast("فعّل كود الترخيص أولاً")
             } else if (on && !serviceEnabled()) {
-                sw.isChecked = false
+                setManualChecked(false)
                 toast("فعّل خدمة إمكانية الوصول أولاً")
             } else {
                 save()
@@ -92,6 +99,32 @@ class MainActivity : AppCompatActivity() {
                 Prefs.setStatus(this, if (on) "وضع النقر اليدوي شغّال" else "وضع النقر اليدوي متوقف")
             }
         }
+        swManual.setOnCheckedChangeListener(manualListener)
+
+        val tileBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = "➕ أضف أزرار للبرداية (الإعدادات السريعة)"
+            cornerRadius = (26 * dp).toInt()
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (52 * dp).toInt()
+            ).apply { topMargin = (10 * dp).toInt() }
+        }
+        tileBtn.setOnClickListener { addTiles() }
+
+        val holder = b.btnToggle.parent as LinearLayout
+        holder.addView(swManual, holder.indexOfChild(b.btnToggle))
+        holder.addView(tileBtn, holder.indexOfChild(b.btnToggle))
+
+        val batBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = "🔋 منع النظام من إيقاف التطبيق"
+            cornerRadius = (26 * dp).toInt()
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (52 * dp).toInt()
+            ).apply { topMargin = (8 * dp).toInt() }
+        }
+        batBtn.setOnClickListener { openBattery() }
+        holder.addView(batBtn, holder.indexOfChild(b.btnToggle))
 
         b.btnActivate.setOnClickListener { activate() }
         b.btnSave.setOnClickListener { save(); toast("تم الحفظ ✔") }
@@ -194,6 +227,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        if (swManual.isChecked != Prefs.isManual(this)) setManualChecked(Prefs.isManual(this))
+
         // العدّ التنازلي
         val left = (Prefs.licenseExpires(this) - System.currentTimeMillis()).coerceAtLeast(0L)
         val s = left / 1000
@@ -220,6 +255,37 @@ class MainActivity : AppCompatActivity() {
         b.btnToggle.backgroundTintList =
             ColorStateList.valueOf(getColor(if (running) R.color.danger else R.color.accent))
         b.btnToggle.setTextColor(getColor(if (running) R.color.text_primary else R.color.on_accent))
+    }
+
+    private fun openBattery() {
+        try {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        } catch (_: Exception) {
+            startActivity(Intent(Settings.ACTION_SETTINGS))
+        }
+        toast("ابحث عن WaReact واختر «بدون قيود»، وفعّل التشغيل التلقائي إن وُجد")
+    }
+
+    private fun setManualChecked(v: Boolean) {
+        swManual.setOnCheckedChangeListener(null)
+        swManual.isChecked = v
+        swManual.setOnCheckedChangeListener(manualListener)
+    }
+
+    private fun addTiles() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            val sbm = getSystemService(StatusBarManager::class.java)
+            val icon = Icon.createWithResource(this, R.drawable.ic_tile)
+            sbm.requestAddTileService(
+                ComponentName(this, ManualTile::class.java), "تفاعل يدوي", icon, mainExecutor
+            ) { _ ->
+                sbm.requestAddTileService(
+                    ComponentName(this, AutoTile::class.java), "مراقبة تلقائية", icon, mainExecutor
+                ) { _ -> }
+            }
+        } else {
+            toast("اسحب شريط الإشعارات لتحت ← ✏️ تعديل ← اسحب «تفاعل يدوي» و«مراقبة تلقائية» للأعلى")
+        }
     }
 
     private fun hideKeyboard() {
