@@ -33,6 +33,14 @@ object TextUtil {
         return spaces.replace(t, " ").trim()
     }
 
+    /** يطبّع قائمة الكلمات مرة واحدة (للمسح السريع): (الأصلية، المطبَّعة). */
+    fun normalizeAll(keywords: List<String>): List<Pair<String, String>> =
+        keywords.map { it to normalize(it) }.filter { it.second.isNotEmpty() }
+
+    /** نص مطبَّع مسبقاً مقابل كلمات مطبَّعة مسبقاً. */
+    fun firstMatchPre(normText: String, pre: List<Pair<String, String>>): String? =
+        pre.firstOrNull { normText.contains(it.second) }?.first
+
     fun firstMatch(text: String, keywords: List<String>): String? {
         val t = normalize(text)
         return keywords.firstOrNull { k ->
