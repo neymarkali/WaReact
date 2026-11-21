@@ -31,13 +31,19 @@ object Prefs {
     // "epoch" يتغيّر مع كل تشغيل/إيقاف/حفظ، والخدمة تصفّر حالتها عند تغيّره
     fun epoch(c: Context): Long = sp(c).getLong("epoch", 0L)
     fun isRunning(c: Context): Boolean = sp(c).getBoolean("running", false)
-    fun setRunning(c: Context, v: Boolean) =
+    fun setRunning(c: Context, v: Boolean) {
         sp(c).edit().putBoolean("running", v).putLong("epoch", System.nanoTime()).apply()
+        Diag.log(c, if (v) "▶ تشغيل المراقبة التلقائية" else "■ إيقاف المراقبة التلقائية")
+        Keep.sync(c)
+    }
 
     // ---- وضع النقر اليدوي ----
     fun isManual(c: Context): Boolean = sp(c).getBoolean("manual", false)
-    fun setManual(c: Context, v: Boolean) =
+    fun setManual(c: Context, v: Boolean) {
         sp(c).edit().putBoolean("manual", v).putLong("epoch", System.nanoTime()).apply()
+        Diag.log(c, if (v) "▶ تشغيل النقر اليدوي" else "■ إيقاف النقر اليدوي")
+        Keep.sync(c)
+    }
 
     // ---- الحالة ----
     fun reactCount(c: Context): Int = sp(c).getInt("count", 0)

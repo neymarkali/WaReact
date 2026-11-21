@@ -1,9 +1,13 @@
 package com.example.wareact
 
+import android.Manifest
 import android.app.StatusBarManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.drawable.Icon
 import android.net.Uri
@@ -16,6 +20,7 @@ import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.CompoundButton
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
@@ -39,6 +44,12 @@ class MainActivity : AppCompatActivity() {
     private val emojis = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private lateinit var swManual: MaterialSwitch
     private lateinit var manualListener: CompoundButton.OnCheckedChangeListener
+    private lateinit var tvPTitle: TextView
+    private lateinit var tvPAcc: TextView
+    private lateinit var tvPBat: TextView
+    private lateinit var tvPNotif: TextView
+    private lateinit var tvPAuto: TextView
+    private lateinit var tvPExit: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,6 +137,8 @@ class MainActivity : AppCompatActivity() {
         batBtn.setOnClickListener { openBattery() }
         holder.addView(batBtn, holder.indexOfChild(b.btnToggle))
 
+        setupProtect()
+
         b.btnActivate.setOnClickListener { activate() }
         b.btnSave.setOnClickListener { save(); toast("تم الحفظ ✔") }
         b.btnAccess.setOnClickListener {
@@ -142,6 +155,12 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         ui.post(ticker)
+        Keep.sync(this)
+        val ex = Diag.exitLines(this, 1).firstOrNull()
+        tvPExit.text = if (ex != null) "آخر إغلاق للتطبيق من النظام:\n$ex" else ""
+        if (LicenseManager.isActive(this) && Build.VERSION.SDK_INT >= 33 && !Diag.notifOk(this) &&
+            !getSharedPreferences("wareact_ui", MODE_PRIVATE).getBoolean("askedNotif", false)
+        ) requestNotif()
         if (Prefs.licenseCode(this).isNotEmpty()) {
             lifecycleScope.launch {
                 LicenseManager.refresh(this@MainActivity)
@@ -255,6 +274,174 @@ class MainActivity : AppCompatActivity() {
         b.btnToggle.backgroundTintList =
             ColorStateList.valueOf(getColor(if (running) R.color.danger else R.color.accent))
         b.btnToggle.setTextColor(getColor(if (running) R.color.text_primary else R.color.on_accent))
+        refreshProtect()
+    }
+
+    // ------------------------------------------------------------------ حماية من الإغلاق
+
+    private fun setupProtect() {
+        val holder = b.btnToggle.parent as LinearLayout
+        val content = (holder.parent as View).parent as LinearLayout
+        val card = layoutInflater.inflate(R.layout.view_protect, content, false)
+        content.addView(card)
+
+        tvPTitle = card.findViewById(R.id.tvPTitle)
+        tvPAcc = card.findViewById(R.id.tvPAcc)
+        tvPBat = card.findViewById(R.id.tvPBat)
+        tvPNotif = card.findViewById(R.id.tvPNotif)
+        tvPAuto = card.findViewById(R.id.tvPAuto)
+        tvPExit = card.findViewById(R.id.tvPExit)
+
+        val xiaomi = Diag.isXiaomi()
+        card.findViewById<View>(R.id.rowPSaver).visibility = if (xiaomi) View.VISIBLE else View.GONE
+        card.findViewById<View>(R.id.rowPPop).visibility = if (xiaomi) View.VISIBLE else View.GONE
+
+        card.findViewById<View>(R.id.btnPAcc).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+        card.findViewById<View>(R.id.btnPBat).setOnClickListener { requestBatteryExemption() }
+        card.findViewById<View>(R.id.btnPNotif).setOnClickListener { requestNotif() }
+        card.findViewById<View>(R.id.btnPAuto).setOnClickListener { openAutostart() }
+        card.findViewById<View>(R.id.btnPSaver).setOnClickListener { openMiuiSaver() }
+        card.findViewById<View>(R.id.btnPPop).setOnClickListener { openMiuiPopup() }
+        card.findViewById<View>(R.id.btnPReport).setOnClickListener { sendReport() }
+    }
+
+    private fun mark(tv: TextView, ok: Boolean, label: String) {
+        tv.text = (if (ok) "✅ " else "❌ ") + label
+        tv.setTextColor(getColor(if (ok) R.color.accent else R.color.danger))
+    }
+
+    private fun refreshProtect() {
+        val acc = serviceEnabled()
+        val bat = Diag.batteryOk(this)
+        val notif = Diag.notifOk(this)
+        val auto: Boolean? = Diag.miuiAutostart(this)
+        mark(tvPAcc, acc, "خدمة الوصول مفعّلة")
+        mark(tvPBat, bat, "استثناء البطارية (بدون قيود)")
+        mark(tvPNotif, notif, "الإشعارات (تُبقي الخدمة حيّة)")
+        if (Diag.isXiaomi()) {
+            if (auto == null) {
+                tvPAuto.text = "❔ التشغيل التلقائي (شاومي) — تأكد أنه مفعّل"
+                tvPAuto.setTextColor(getColor(R.color.text_secondary))
+            } else {
+                mark(tvPAuto, auto, "التشغيل التلقائي (شاومي)")
+            }
+        } else {
+            tvPAuto.text = "⚙️ السماح بالعمل بالخلفية (إعدادات التطبيق)"
+            tvPAuto.setTextColor(getColor(R.color.text_secondary))
+        }
+        val ok = acc && bat && notif && auto != false
+        tvPTitle.text = if (ok) "🛡 الحماية كاملة ✔" else "🛡 الحماية ناقصة — أكمل البنود بالأحمر"
+        tvPTitle.setTextColor(getColor(if (ok) R.color.accent else R.color.danger))
+    }
+
+    private fun requestNotif() {
+        if (Diag.notifOk(this)) return
+        val p = getSharedPreferences("wareact_ui", MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT >= 33 && !p.getBoolean("askedNotif", false)) {
+            p.edit().putBoolean("askedNotif", true).apply()
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 11)
+        } else {
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                )
+            } catch (_: Throwable) {
+                openAppDetails()
+            }
+        }
+    }
+
+    private fun requestBatteryExemption() {
+        if (Diag.batteryOk(this)) {
+            toast("مفعّل ✔")
+            return
+        }
+        try {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+            )
+        } catch (_: Throwable) {
+            openBattery()
+        }
+    }
+
+    private fun tryStart(vararg intents: Intent): Boolean {
+        for (i in intents) {
+            try {
+                startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return true
+            } catch (_: Throwable) {
+            }
+        }
+        return false
+    }
+
+    private fun openAppDetails() {
+        try {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+            )
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun openAutostart() {
+        val ok = tryStart(
+            Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")),
+            Intent().setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")),
+            Intent().setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity")),
+            Intent().setComponent(ComponentName("com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity")),
+            Intent().setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")),
+            Intent().setComponent(ComponentName("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"))
+        )
+        if (!ok) openAppDetails()
+        toast("فعّل WaReact بالقائمة (التشغيل التلقائي / السماح بالعمل بالخلفية)")
+    }
+
+    private fun openMiuiSaver() {
+        val ok = tryStart(
+            Intent().setClassName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity")
+                .putExtra("package_name", packageName)
+                .putExtra("package_label", getString(R.string.app_name)),
+            Intent("miui.intent.action.POWER_HIDE_MODE_APP_LIST").addCategory(Intent.CATEGORY_DEFAULT)
+        )
+        if (!ok) openAppDetails()
+        toast("اختر «بدون قيود» لتطبيق WaReact")
+    }
+
+    private fun openMiuiPopup() {
+        val ok = tryStart(
+            Intent("miui.intent.action.APP_PERM_EDITOR")
+                .setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+                .putExtra("extra_pkgname", packageName),
+            Intent("miui.intent.action.APP_PERM_EDITOR")
+                .setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.AppPermissionsEditorActivity")
+                .putExtra("extra_pkgname", packageName)
+        )
+        if (!ok) openAppDetails()
+        toast("فعّل: «عرض نوافذ منبثقة أثناء التشغيل بالخلفية» و«التشغيل التلقائي»")
+    }
+
+    private fun sendReport() {
+        val r = Diag.report(this)
+        try {
+            (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                .setPrimaryClip(ClipData.newPlainText("WaReact", r))
+        } catch (_: Throwable) {
+        }
+        try {
+            startActivity(
+                Intent.createChooser(
+                    Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, r),
+                    "إرسال التقرير"
+                )
+            )
+        } catch (_: Throwable) {
+        }
+        toast("تم نسخ التقرير ✔ أرسله للدعم")
     }
 
     private fun openBattery() {

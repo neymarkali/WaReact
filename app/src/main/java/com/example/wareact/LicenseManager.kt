@@ -19,6 +19,7 @@ object LicenseManager {
     private const val COLLECTION = "licenses"
     private const val DAY_MS = 86_400_000L
     private const val OFFLINE_GRACE_MS = 72L * 3_600_000L // أقصى مدة عمل بدون تحقق من الخادم
+    private const val CLOCK_TOLERANCE_MS = 6L * 3_600_000L // سماح بتصحيح ساعة الجهاز من الشبكة للخلف
 
     fun deviceId(c: Context): String =
         Settings.Secure.getString(c.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
@@ -30,7 +31,7 @@ object LicenseManager {
         val checked = Prefs.licenseCheckedAt(c)
         val now = System.currentTimeMillis()
         // الشرط الثاني يكشف إرجاع ساعة الجهاز للخلف، والثالث يفرض إعادة التحقق أونلاين
-        return exp > 0 && now >= checked - 60_000L && now < exp && now - checked < OFFLINE_GRACE_MS
+        return exp > 0 && now >= checked - CLOCK_TOLERANCE_MS && now < exp && now - checked < OFFLINE_GRACE_MS
     }
 
     fun daysLeft(c: Context): Long {

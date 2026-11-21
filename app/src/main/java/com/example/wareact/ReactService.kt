@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.app.Notification
 import android.app.PendingIntent
+import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Handler
@@ -53,6 +54,7 @@ class ReactService : AccessibilityService() {
     private var curManual = false
     private var curList: AccessibilityNodeInfo? = null
     private var curT0 = 0L
+    private var reactToken = 0
 
     private var scanQueued = false
     private var queuedDue = 0L
@@ -85,12 +87,23 @@ class ReactService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        Live.service = this
+        Diag.log(this, "✅ خدمة الوصول اتصلت")
         Prefs.setStatus(this, "خدمة الوصول متصلة")
+        Keep.sync(this)
     }
 
     override fun onInterrupt() {}
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        if (Live.service === this) Live.service = null
+        Diag.log(this, "⛔ النظام فصل خدمة الوصول (onUnbind)", true)
+        return super.onUnbind(intent)
+    }
+
     override fun onDestroy() {
+        if (Live.service === this) Live.service = null
+        Diag.log(this, "⛔ خدمة الوصول دُمّرت (onDestroy)", true)
         scope.cancel()
         main.removeCallbacksAndMessages(null)
         super.onDestroy()
@@ -499,15 +512,16 @@ class ReactService : AccessibilityService() {
         Prefs.setStatus(this, label)
         lastDiag = "react"
 
+        val tk = ++reactToken
         val viaAction = bubble?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
         if (viaAction) {
-            main.post { pickEmoji(0) }
+            main.post { pickEmoji(0, tk) }
         } else {
             gesture(
                 bounds.centerX().toFloat(), bounds.centerY().toFloat(),
                 ViewConfiguration.getLongPressTimeout() + 250L
             )
-            main.postDelayed({ pickEmoji(0) }, ViewConfiguration.getLongPressTimeout() + 400L)
+            main.postDelayed({ pickEmoji(0, tk) }, ViewConfiguration.getLongPressTimeout() + 400L)
         }
     }
 
@@ -519,7 +533,9 @@ class ReactService : AccessibilityService() {
         }
     }
 
-    private fun pickEmoji(attempt: Int) {
+    private fun pickEmoji(attempt: Int, tk: Int) {
+        // انتهت هذه العملية (تصفير/مهلة): لا نكمل حلقة قديمة تتداخل مع عملية جديدة
+        if (tk != reactToken || !busy) return
         try {
             val emoji = Prefs.emoji(this)
             // بحث سريع بطلب واحد؛ وبعد عدة محاولات نلجأ للمسح الكامل كاحتياط
@@ -538,8 +554,8 @@ class ReactService : AccessibilityService() {
                 requestScan(POLL)
                 return
             }
-            if (attempt < 500) {
-                main.postDelayed({ pickEmoji(attempt + 1) }, 4)
+            if (SystemClock.uptimeMillis() - busySince < PICK_LIMIT) {
+                main.postDelayed({ pickEmoji(attempt + 1, tk) }, 4)
             } else {
                 // فشل: نسمح بإعادة المحاولة على نفس الرسالة بعد 8 ثوانٍ فقط
                 curSig?.let { seen[it] = System.currentTimeMillis() + 8_000L }
@@ -663,13 +679,15 @@ class ReactService : AccessibilityService() {
     private fun maybeRefreshLicense() {
         if (refreshing || Prefs.licenseCode(this).isEmpty()) return
         val now = System.currentTimeMillis()
-        if (now - Prefs.licenseCheckedAt(this) < 6 * 3_600_000L) return
+        val age = now - Prefs.licenseCheckedAt(this)
+        if (age >= 0 && age < 6 * 3_600_000L) return // حديث (وإن رجعت الساعة للخلف نعيد التحقق)
         if (now - lastRefreshTry < 10 * 60_000L) return
         lastRefreshTry = now
         refreshing = true
         scope.launch {
             try {
                 LicenseManager.refresh(this@ReactService)
+            } catch (_: Throwable) {
             } finally {
                 refreshing = false
             }
@@ -677,8 +695,9 @@ class ReactService : AccessibilityService() {
     }
 
     private companion object {
-        const val POLL = 150L            // مسح دوري كل 0.3 ثانية
-        const val MIN_GAP = 60L         // أقل فاصل بين مسحين
+        const val POLL = 300L            // مسح دوري احتياطي (الأحداث تشغّل المسح فوراً)
+        const val MIN_GAP = 80L          // أقل فاصل بين مسحين (يخفف الحمل فلا يقتل النظام التطبيق)
+        const val PICK_LIMIT = 3500L     // أقصى مدة للبحث عن الإيموجي بعد الضغط المطوّل
         const val BUSY_LIMIT = 5000L     // أقصى مدة لعملية تفاعل قبل إعادة الضبط
         const val MANUAL_PAUSE = 10_000L // توقف النقر اليدوي بعد كل تفاعل
         const val SESSION_GAP = 3000L    // غياب خانة الكتابة أكثر من هذا = دخول محادثة جديدة
