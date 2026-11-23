@@ -44,6 +44,8 @@ class MainActivity : AppCompatActivity() {
     private val emojis = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private lateinit var swManual: MaterialSwitch
     private lateinit var manualListener: CompoundButton.OnCheckedChangeListener
+    private lateinit var swTest: MaterialSwitch
+    private lateinit var testListener: CompoundButton.OnCheckedChangeListener
     private lateinit var tvPTitle: TextView
     private lateinit var tvPAcc: TextView
     private lateinit var tvPBat: TextView
@@ -112,6 +114,36 @@ class MainActivity : AppCompatActivity() {
         }
         swManual.setOnCheckedChangeListener(manualListener)
 
+        // وضع الاختبار: يتفاعل حتى على رسائلك أنت (لتجربة التطبيق من هاتف واحد) ويُطفأ وحده بعد 10 دقائق
+        swTest = MaterialSwitch(this).apply {
+            text = TEST_OFF_TEXT
+            textSize = 14f
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = Prefs.isTest(this@MainActivity)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (10 * dp).toInt() }
+        }
+        testListener = CompoundButton.OnCheckedChangeListener { _, on ->
+            if (on && !LicenseManager.isActive(this)) {
+                setTestChecked(false)
+                toast("فعّل كود الترخيص أولاً")
+            } else if (on && !serviceEnabled()) {
+                setTestChecked(false)
+                toast("فعّل خدمة إمكانية الوصول أولاً")
+            } else {
+                save()
+                Prefs.setTest(this, on)
+                Prefs.setStatus(
+                    this,
+                    if (on) "وضع الاختبار شغّال: أرسل كلمة مفتاحية بأي محادثة" else "وضع الاختبار متوقف"
+                )
+                if (on && !Prefs.isRunning(this)) toast("اضغط «ابدأ المراقبة» لتعمل التجربة")
+            }
+        }
+        swTest.setOnCheckedChangeListener(testListener)
+
         val tileBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             text = "➕ أضف أزرار للبرداية (الإعدادات السريعة)"
             cornerRadius = (26 * dp).toInt()
@@ -124,6 +156,7 @@ class MainActivity : AppCompatActivity() {
 
         val holder = b.btnToggle.parent as LinearLayout
         holder.addView(swManual, holder.indexOfChild(b.btnToggle))
+        holder.addView(swTest, holder.indexOfChild(b.btnToggle))
         holder.addView(tileBtn, holder.indexOfChild(b.btnToggle))
 
         val batBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
@@ -247,6 +280,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (swManual.isChecked != Prefs.isManual(this)) setManualChecked(Prefs.isManual(this))
+        val testLeft = Prefs.testLeftMs(this)
+        if (swTest.isChecked != (testLeft > 0L)) setTestChecked(testLeft > 0L)
+        swTest.text = if (testLeft > 0L) {
+            "وضع الاختبار شغّال — باقي ${testLeft / 60_000}:" +
+                String.format(Locale.US, "%02d", testLeft / 1000 % 60) +
+                "\nيتفاعل حتى على رسائلك أنت (يعمل مع المراقبة التلقائية)"
+        } else TEST_OFF_TEXT
 
         // العدّ التنازلي
         val left = (Prefs.licenseExpires(this) - System.currentTimeMillis()).coerceAtLeast(0L)
@@ -453,6 +493,12 @@ class MainActivity : AppCompatActivity() {
         toast("ابحث عن WaReact واختر «بدون قيود»، وفعّل التشغيل التلقائي إن وُجد")
     }
 
+    private fun setTestChecked(v: Boolean) {
+        swTest.setOnCheckedChangeListener(null)
+        swTest.isChecked = v
+        swTest.setOnCheckedChangeListener(testListener)
+    }
+
     private fun setManualChecked(v: Boolean) {
         swManual.setOnCheckedChangeListener(null)
         swManual.isChecked = v
@@ -484,4 +530,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_LONG).show()
+
+    private companion object {
+        const val TEST_OFF_TEXT =
+            "وضع الاختبار (10 دقائق): يتفاعل حتى على رسائلك أنت — لتجربة التطبيق من هاتف واحد"
+    }
 }

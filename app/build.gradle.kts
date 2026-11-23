@@ -12,8 +12,10 @@ android {
         applicationId = "com.example.wareact"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // رقم البناء من GitHub Actions: يظهر في تقرير الدعم لنعرف أي نسخة ثُبّتت عند العميل
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "1.0.$build"
     }
 
     buildTypes {

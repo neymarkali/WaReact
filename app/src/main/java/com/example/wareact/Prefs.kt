@@ -45,6 +45,23 @@ object Prefs {
         Keep.sync(c)
     }
 
+    // ---- وضع الاختبار: يتفاعل حتى على رسائلك أنت (للتجربة من هاتف واحد) ويُطفأ تلقائياً بعد 10 دقائق ----
+    private const val TEST_MS = 10 * 60_000L
+    fun testLeftMs(c: Context): Long {
+        val until = sp(c).getLong("test_until", 0L)
+        val left = until - System.currentTimeMillis()
+        // إن رجعت الساعة للخلف بشكل غير منطقي نعتبره منتهياً
+        return if (left in 1..TEST_MS) left else 0L
+    }
+    fun isTest(c: Context): Boolean = testLeftMs(c) > 0L
+    fun setTest(c: Context, v: Boolean) {
+        sp(c).edit()
+            .putLong("test_until", if (v) System.currentTimeMillis() + TEST_MS else 0L)
+            .putLong("epoch", System.nanoTime())
+            .apply()
+        Diag.log(c, if (v) "🧪 تشغيل وضع الاختبار (10 دقائق)" else "🧪 إيقاف وضع الاختبار")
+    }
+
     // ---- الحالة ----
     fun reactCount(c: Context): Int = sp(c).getInt("count", 0)
     fun incReact(c: Context) = sp(c).edit().putInt("count", reactCount(c) + 1).apply()

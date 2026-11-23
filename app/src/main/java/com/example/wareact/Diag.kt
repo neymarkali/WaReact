@@ -42,6 +42,28 @@ object Diag {
         }
     }
 
+    private fun stampShort(): String = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+
+    /** حلقة سجل صغيرة باسم (آخر max سطراً) للتقرير: أزمنة التفاعل وقرارات التصنيف. */
+    @Synchronized
+    fun note(c: Context, key: String, msg: String, max: Int = 8) {
+        try {
+            val k = "ring_$key"
+            val old = sp(c).getString(k, "") ?: ""
+            val lines = old.split('\n').filter { it.isNotBlank() }.toMutableList()
+            lines.add("${stampShort()}  ${msg.replace('\n', ' ')}")
+            while (lines.size > max) lines.removeAt(0)
+            sp(c).edit().putString(k, lines.joinToString("\n")).apply()
+        } catch (_: Throwable) {
+        }
+    }
+
+    fun ring(c: Context, key: String): String = try {
+        sp(c).getString("ring_$key", "") ?: ""
+    } catch (_: Throwable) {
+        ""
+    }
+
     fun saveCrash(c: Context, t: Throwable) {
         try {
             val frames = t.stackTrace.take(5).joinToString("\n    ") { it.toString() }
@@ -181,6 +203,12 @@ object Diag {
         "?"
     }
 
+    private fun waVersion(c: Context, pkg: String): String? = try {
+        c.packageManager.getPackageInfo(pkg, 0).versionName
+    } catch (_: Throwable) {
+        null
+    }
+
     fun report(c: Context): String = buildString {
         appendLine("=== تقرير WaReact ===")
         appendLine("الوقت: ${stamp()}")
@@ -188,7 +216,11 @@ object Diag {
         appendLine("النظام: ${Build.DISPLAY}")
         appendLine("نسخة التطبيق: ${version(c)}")
         appendLine("خدمة الوصول: مفعّلة=${accessibilityEnabled(c)} | متصلة فعلياً=${Live.service != null}")
-        appendLine("تلقائي=${Prefs.isRunning(c)} | يدوي=${Prefs.isManual(c)}")
+        val wa = waVersion(c, "com.whatsapp")
+        val wb = waVersion(c, "com.whatsapp.w4b")
+        appendLine("واتساب: ${wa ?: "غير ظاهر"} | واتساب أعمال: ${wb ?: "غير ظاهر"}")
+        appendLine("لغة الجهاز: ${Locale.getDefault()} | اتجاه الواجهة: ${if (c.resources.configuration.layoutDirection == android.view.View.LAYOUT_DIRECTION_RTL) "RTL" else "LTR"}")
+        appendLine("تلقائي=${Prefs.isRunning(c)} | يدوي=${Prefs.isManual(c)} | وضع الاختبار=${Prefs.isTest(c)}")
         appendLine("استثناء البطارية=${batteryOk(c)} | الإشعارات=${notifOk(c)} | العرض فوق التطبيقات=${overlayOk(c)}")
         appendLine("تشغيل تلقائي شاومي=${miuiAutostart(c) ?: "غير معروف"}")
         val at = try {
@@ -201,6 +233,14 @@ object Diag {
             "الترخيص: فعّال=${LicenseManager.isActive(c)} | آخر تحقق=${stamp(Prefs.licenseCheckedAt(c))} | ينتهي=${stamp(Prefs.licenseExpires(c))}"
         )
         appendLine("آخر حالة: ${Prefs.status(c)}")
+        appendLine("عدد التفاعلات: ${Prefs.reactCount(c)}")
+        appendLine("حالة الخدمة: ${Live.service?.debugState() ?: "الخدمة غير متصلة"}")
+        appendLine()
+        appendLine("-- آخر أزمنة التفاعل (ms) --")
+        appendLine(ring(c, "react").ifBlank { "لا يوجد بعد" })
+        appendLine()
+        appendLine("-- آخر قرارات الصادر/الوارد --")
+        appendLine(ring(c, "cls").ifBlank { "لا يوجد بعد" })
         appendLine()
         appendLine("-- آخر انهيار --")
         appendLine(sp(c).getString("crash", null) ?: "لا يوجد")
