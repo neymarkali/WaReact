@@ -113,7 +113,9 @@ class ReactService : AccessibilityService() {
 
     // تصنيف وارد/صادر: علامة التسليم (مستقلة عن اتجاه اللغة) + اتجاه واتساب المتعلَّم
     private var tickOk = false
-    private var outLeft: Boolean? = null
+    private var outLeft: Boolean? = null    // متعلَّم من علامات التسليم (الأدق)
+    private var micOutLeft: Boolean? = null // مستنتَج من موضع زر الإرسال/الميكروفون
+    private var micAt = 0L
     private var lastCls = ""
     private var lastOwnClickAt = 0L
 
@@ -703,12 +705,43 @@ class ReactService : AccessibilityService() {
     private fun geoIncoming(tb: Rect, width: Int, rtl: Boolean): Boolean {
         val leftGap = tb.left
         val rightGap = width - tb.right
-        val ol = outLeft
+        val ol = outLeft ?: micOutLeft
         return if (ol != null) {
             // الصادر على اليسار => الوارد على اليمين، والعكس
             if (ol) rightGap <= leftGap else leftGap <= rightGap
         } else {
             if (rtl) rightGap <= leftGap else leftGap <= rightGap
+        }
+    }
+
+    /**
+     * اتجاه واجهة واتساب الفعلي من موضع زر الإرسال/الميكروفون (يقع عند نهاية الشريط السفلي:
+     * يميناً بواجهة LTR ويساراً بواجهة RTL). يفيد إن اختلفت لغة واتساب عن لغة الهاتف.
+     */
+    private fun refreshMicHint(width: Int, pkg: String) {
+        val nowUp = SystemClock.uptimeMillis()
+        if (nowUp - micAt < MIC_TTL) return
+        val root = fastRoot ?: return
+        micAt = nowUp
+        try {
+            for (id in arrayOf("voice_note_btn", "send")) {
+                val l = root.findAccessibilityNodeInfosByViewId("$pkg:id/$id")
+                if (l.isNullOrEmpty()) continue
+                val r = Rect()
+                for (n in l) {
+                    if (!n.isVisibleToUser) continue
+                    n.getBoundsInScreen(r)
+                    if (r.width() <= 0) continue
+                    if (Math.abs(r.centerX() - width / 2) < width / 6) continue // غير حاسم
+                    val ol = r.centerX() < width / 2
+                    if (micOutLeft != ol) {
+                        micOutLeft = ol
+                        Diag.log(this, "📐 واجهة واتساب من زر الإرسال: ${if (ol) "RTL (الصادر يسار)" else "LTR (الصادر يمين)"}")
+                    }
+                    return
+                }
+            }
+        } catch (_: Throwable) {
         }
     }
 
@@ -738,11 +771,17 @@ class ReactService : AccessibilityService() {
         pkg: String,
         why: StringBuilder
     ): Boolean {
+        if (outLeft == null) refreshMicHint(width, pkg)
         val geo = geoIncoming(tb, width, rtl)
+        val geoSrc = when {
+            outLeft != null -> "اتجاه واتساب المتعلَّم من العلامات"
+            micOutLeft != null -> "اتجاه واتساب من زر الإرسال"
+            else -> "اتجاه الجهاز"
+        }
         val list = row.list
         val item = row.item
         if (list == null || item == null) {
-            why.append("بالموضع فقط (لم أجد صف الرسالة)")
+            why.append("بالموضع فقط [$geoSrc] (لم أجد صف الرسالة)")
             return geo
         }
         try {
@@ -776,7 +815,7 @@ class ReactService : AccessibilityService() {
             }
         } catch (_: Throwable) {
         }
-        why.append("بالموضع فقط (لا دليل من علامات التسليم)")
+        why.append("بالموضع فقط [$geoSrc] (لا دليل من علامات التسليم)")
         return geo
     }
 
@@ -1135,7 +1174,13 @@ class ReactService : AccessibilityService() {
             null -> "غير معروف بعد"
         }
         val idAge = if (lastIdHit == 0L) "لم تُرَ" else "قبل ${(nowUp - lastIdHit) / 1000} ث"
-        return "اتجاه الجهاز=${if (devRtl) "RTL" else "LTR"} | الصادر عند واتساب=$ol | " +
+        val mic = when (micOutLeft) {
+            true -> "RTL"
+            false -> "LTR"
+            null -> "غير معروف"
+        }
+        return "اتجاه الجهاز=${if (devRtl) "RTL" else "LTR"} | اتجاه واتساب من زر الإرسال=$mic | " +
+            "الصادر عند واتساب (من العلامات)=$ol | " +
             "علامة التسليم موثوقة=$tickOk | معرّفات الرسائل=$idAge | " +
             "مسار سريع=$fastOk | مشغول=$busy | وضع الاختبار=${Prefs.isTest(this)}"
     }
@@ -1147,6 +1192,7 @@ class ReactService : AccessibilityService() {
         const val ROOT_RETRY = 250L      // أقل فاصل لإعادة جلب الجذر عندما لا نجد رسائل
         const val IN_CONV_TTL = 1500L    // مدة تذكّر أننا داخل محادثة (يوفّر طلباً عند كل حدث)
         const val ID_OK_MS = 4000L       // المسار السريع «يعمل» إذا وجدنا نصوص الرسائل خلال هذه المدة
+        const val MIC_TTL = 10_000L      // أقل فاصل بين قراءتين لموضع زر الإرسال
         const val OWN_CLICK_GUARD = 700L // نتجاهل حدث النقر الذي ولّدناه نحن
         const val MIN_GAP = 120L         // أقل فاصل بين مسحين كاملين (يخفف الحمل)
         const val FAST_GAP = 30L         // أقل فاصل بين كشفين سريعين
