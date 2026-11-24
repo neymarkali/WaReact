@@ -1,0 +1,51 @@
+name: Selftest signing (temporary)
+
+on:
+  push:
+    paths: ['.github/workflows/selftest-signing.yml']
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+
+      - name: Throwaway key made with the exact Cloud Shell command, passed through base64 like a secret
+        run: |
+          PASS=$(openssl rand -hex 12)
+          keytool -genkeypair -storetype PKCS12 -keystore wareact.jks -alias wareact -keyalg RSA -keysize 2048 -validity 10000 -storepass "$PASS" -keypass "$PASS" -dname "CN=WaReact"
+          KEYSTORE_BASE64=$(base64 -w0 wareact.jks)
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/wareact.jks"
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/wareact.jks" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=$PASS" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=$PASS" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=wareact" >> "$GITHUB_ENV"
+          EXPECTED=$(keytool -list -v -keystore "$RUNNER_TEMP/wareact.jks" -storepass "$PASS" | grep "SHA256:" | head -1 | sed 's/.*SHA256: //' | tr -d ':' | tr 'A-F' 'a-f')
+          echo "EXPECTED_SHA=$EXPECTED" >> "$GITHUB_ENV"
+          echo "keystore cert sha256: $EXPECTED"
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Compare APK certificate with the key
+        run: |
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify -v --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -E "Verified using|Signer #1 certificate (DN|SHA-256)"
+          AP=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep "Signer #1 certificate SHA-256 digest" | sed 's/.*: //')
+          echo "expected: $EXPECTED_SHA"
+          echo "apk     : $AP"
+          if [ "$EXPECTED_SHA" = "$AP" ]; then echo "MATCH - signing path works"; else echo "MISMATCH"; exit 1; fi
