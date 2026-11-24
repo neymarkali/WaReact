@@ -4,6 +4,15 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+// مفتاح توقيع ثابت (من أسرار GitHub). إن لم يكن موجوداً نرجع للمفتاح العشوائي القديم فلا ينكسر البناء.
+// التوقيع الثابت = كل تحديث يُثبَّت فوق النسخة القديمة ويبقى الترخيص ومعرّف الجهاز كما هما.
+val ksFile: String? = System.getenv("KEYSTORE_FILE")
+val ksPass: String? = System.getenv("KEYSTORE_PASSWORD")
+val ksAlias: String? = System.getenv("KEY_ALIAS")
+val ksKeyPass: String? = System.getenv("KEY_PASSWORD")
+val hasStableKey: Boolean =
+    listOf(ksFile, ksPass, ksAlias, ksKeyPass).all { !it.isNullOrBlank() } && file(ksFile!!).exists()
+
 android {
     namespace = "com.example.wareact"
     compileSdk = 34
@@ -18,9 +27,23 @@ android {
         versionName = "1.0.$build"
     }
 
+    signingConfigs {
+        if (hasStableKey) {
+            create("stable") {
+                storeFile = file(ksFile!!)
+                storePassword = ksPass
+                keyAlias = ksAlias
+                keyPassword = ksKeyPass
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (hasStableKey) signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = false
+            if (hasStableKey) signingConfig = signingConfigs.getByName("stable")
         }
     }
     buildFeatures {
